@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 )
@@ -12,15 +13,21 @@ type Config struct {
 }
 type Server struct {
 	Config
-	ln net.Listener
+	peers     map[*Peer]bool
+	ln        net.Listener
+	addPeerch chan *Peer
+	msgCh     chan []byte
 }
 
-func NewSever(config Config) *Server {
+func NewServer(config Config) *Server {
 	if len(config.ListenerAddreess) == 0 {
 		config.ListenerAddreess = defaultAddr
 	}
 	return &Server{
-		Config: config,
+		Config:    config,
+		peers:     make(map[*Peer]bool),
+		addPeerch: make(chan *Peer),
+		msgCh:     make(chan []byte),
 	}
 }
 
@@ -30,21 +37,42 @@ func (s *Server) Start() error {
 		return err
 	}
 	s.ln = ln
-	s.AcceptLoop()
-	return nil
+	fmt.Println("Listening on", s.ListenerAddreess)
+	go s.loop()
+	return s.AcceptLoop()
+
 }
 
-func (s *Server) AcceptLoop() {
+func (s *Server) loop() {
+	for {
+		select {
+		case rawMsg := <-s.msgCh:
+			fmt.Println("Received message", string(rawMsg))
+		case peer := <-s.addPeerch:
+			s.peers[peer] = true
+		}
+	}
+}
+
+func (s *Server) AcceptLoop() error {
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
 			slog.Error("err", err)
 			continue
 		}
+		go s.handleConn(conn)
 	}
 }
+func (s *Server) handleConn(conn net.Conn) {
+
+	peer := NewPeer(conn, s.msgCh)
+	s.addPeerch <- peer
+	fmt.Println("New peer connected", conn.RemoteAddr())
+	peer.readLoop()
+}
 func main() {
-	server := NewSever(Config{
+	server := NewServer(Config{
 		ListenerAddreess: ":8080",
 	})
 	server.Start()
